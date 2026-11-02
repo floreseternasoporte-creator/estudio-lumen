@@ -1,0 +1,9 @@
+# Claves y entorno — NUNCA subir
+.env
+.env.*
+*.key
+
+# Sistema / editores
+.DS_Store
+node_modules/
+.vscode/
