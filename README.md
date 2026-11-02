@@ -2,7 +2,17 @@
 
 Estudio de creación de video con IA en un solo archivo HTML — interfaz estilo Apple, sin dependencias, lista para conectar a una API real de generación de video.
 
-> **Estado actual:** prototipo frontend funcional. La “generación” es simulada en el navegador con canvas procedural (sin backend). La estructura ya está preparada para sustituir esa simulación por una API real — ver [`docs/APIS-VIDEO.md`](docs/APIS-VIDEO.md) y [`docs/INTEGRACION.md`](docs/INTEGRACION.md).
+> **Estado actual:** frontend funcional **con backend opcional para MiniMax H3 directo** (ver [`server/`](server/)). Sirviendo la app desde ese servidor, Generar produce video real de H3 (con audio nativo); sin servidor (p. ej. la demo de GitHub Pages), la generación es simulada en el navegador con canvas procedural. Comparativa de APIs en [`docs/APIS-VIDEO.md`](docs/APIS-VIDEO.md) y detalles en [`docs/INTEGRACION.md`](docs/INTEGRACION.md).
+
+## Generar video real con MiniMax H3
+
+```bash
+cd server
+MINIMAX_API_KEY=tu_key node server.js   # http://localhost:8787
+# o sin gastar saldo, para probar el flujo:  npm run mock
+```
+
+La key vive solo en el servidor. Coste real: $0,08/s a 768P y $0,13/s a 2K (un clip de 5 s = $0,40 / $0,65). H3 limita la duración a 15 s y no tiene 4K: la UI se ajusta sola (ver `server/README.md`).
 
 ![Tipo](https://img.shields.io/badge/tipo-single--file%20HTML-black) ![Licencia](https://img.shields.io/badge/licencia-MIT-blue)
 
@@ -41,13 +51,17 @@ estudio-lumen/
 ├── index.html                        # La app completa (HTML + CSS + JS, sin build)
 ├── original/
 │   └── Estudio_Lumen_original.html   # Archivo tal cual fue entregado
+├── server/
+│   ├── server.js                     # Backend Node sin dependencias (proxy seguro a MiniMax)
+│   ├── sample.mp4                    # Video de muestra para el modo mock
+│   └── README.md                     # Arranque, endpoints y mapeo UI → H3
 ├── docs/
 │   ├── APIS-VIDEO.md                 # Comparativa de APIs de video (precios nov 2026)
 │   └── INTEGRACION.md                # Cómo conectar una API real, con ejemplos
 ├── examples/
 │   ├── fal.js                        # Ejemplo fal.ai (Kling / Veo / Hailuo con 1 key)
 │   ├── runway.js                     # Ejemplo Runway Dev API
-│   └── minimax.js                    # Ejemplo MiniMax H3 directo
+│   └── minimax.js                    # Ejemplo MiniMax H3 directo (API v2)
 ├── .gitignore
 └── LICENSE
 ```
@@ -66,8 +80,9 @@ Sin frameworks, sin bundler, sin llamadas de red salvo la fuente Inter de Google
 
 ## Roadmap
 
-- [ ] Conectar generación real vía fal.ai (una sola key para Kling, Veo, Hailuo, Seedance, Wan)
-- [ ] Backend mínimo que oculte la API key (nunca en el frontend) y gestione créditos reales
+- [x] Backend mínimo que oculta la API key y conecta **MiniMax H3 directo** (`server/`)
+- [ ] Conectar también vía fal.ai (una sola key para Kling, Veo, Hailuo, Seedance, Wan)
+- [ ] Créditos reales ligados al coste de la API (hoy el backend devuelve el coste estimado por clip)
 - [ ] Descarga real del MP4 generado (hoy el botón abre pantalla completa)
 - [ ] Persistir historial (localStorage / backend)
 - [ ] Subida de referencias a storage temporal para pasar URLs a la API

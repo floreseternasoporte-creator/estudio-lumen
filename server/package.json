@@ -1,0 +1,11 @@
+{
+  "name": "estudio-lumen-server",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Backend mínimo de Estudio Lumen para MiniMax H3",
+  "scripts": {
+    "start": "node server.js",
+    "mock": "MINIMAX_MOCK=1 node server.js"
+  },
+  "engines": { "node": ">=18" }
+}

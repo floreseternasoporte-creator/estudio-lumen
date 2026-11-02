@@ -1,7 +1,13 @@
 # Cómo conectar Estudio Lumen a una API real
 
-La app simula la generación en `index.html` dentro del handler de `#go` (progreso + `makeClips()`).
-Para pasar a video real hay que sustituir **solo esa simulación** por una llamada a API; el resto de la UI (prompt, referencias, cámara, estilo, historial) ya produce todos los parámetros necesarios.
+> **Ya implementado para MiniMax H3 directo:** el backend vive en [`../server/`](../server/)
+> y el frontend lo detecta solo (`GET /api/health`): con backend, Generar llama a H3 de
+> verdad; sin backend, se mantiene la simulación original. Este documento queda como la
+> explicación general y la guía para añadir otros proveedores (fal, Runway).
+
+La app simulaba la generación en `index.html` dentro del handler de `#go` (progreso + `makeClips()`).
+La integración real se añadió como un bloque al final del script que reutiliza ese handler
+como fallback (`simGenerate`) y lo sustituye solo cuando hay backend.
 
 ## Regla de oro: la API key nunca va en el frontend
 

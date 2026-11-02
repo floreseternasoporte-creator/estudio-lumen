@@ -131,6 +131,7 @@ input[type=range]::-moz-range-thumb{width:24px;height:24px;border:0;border-radiu
 .stagewrap{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:0 22px 12px}
 .stage{position:relative;background:var(--stage);border-radius:22px;overflow:hidden;box-shadow:var(--shadow);max-width:100%;max-height:100%;aspect-ratio:16/9;height:100%;transition:aspect-ratio .3s}
 .stage canvas{width:100%;height:100%;display:block}
+.stage video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000}
 .empty{position:absolute;inset:0;display:grid;place-items:center;text-align:center;color:#fff;padding:20px;background:radial-gradient(120% 90% at 50% 0%,#26262c,#0b0b0d)}
 .empty h3{font-size:26px;letter-spacing:-.02em;margin:0 0 6px}
 .empty p{color:#a1a1a6;margin:0 auto;max-width:340px}
@@ -286,6 +287,7 @@ input[type=range]::-moz-range-thumb{width:24px;height:24px;border:0;border-radiu
       <div class="r"><div class="pill">Créditos <b id="credits">1,000</b></div></div></div>
     <div class="stagewrap"><div class="stage" id="stage">
       <canvas id="cv" width="1280" height="720"></canvas>
+      <video id="vid" playsinline loop crossorigin="anonymous" hidden></video>
       <div class="empty" id="empty"><div><h3>Tu escena empieza aquí</h3><p>Sube una referencia, escribe tu idea y elige la duración. Pulsa Generar para ver el resultado.</p></div></div>
       <div class="hud" id="hud" hidden></div>
       <div class="bar" id="bar" hidden>
@@ -602,6 +604,119 @@ function drawExplore(){
     renderClip(b.querySelector('canvas').getContext('2d'),460,288,{imgs:[],hue:i.h,seed:hash(i.p),dur:5,cam:i.cam,sty:i.sty,motion:60,prompt:i.p},.4);
     b.onclick=()=>loadIdea(i);g.appendChild(b)});
 }
+/* ---------- integración MiniMax H3 (backend opcional) ----------
+   Si la app se sirve desde server/server.js, Generar llama a MiniMax H3 de
+   verdad (la key vive en el servidor). Sin backend (p. ej. GitHub Pages),
+   se mantiene la simulación original. */
+const simGenerate=$('#go').onclick;
+const vid=$('#vid');
+const CAM_EN={in:'[push in] slow dolly in',out:'[pull out] slow dolly out',panl:'[pan left]',panr:'[pan right]',orbit:'orbital camera movement around the subject',up:'crane shot rising up',down:'crane shot descending',fpv:'fast FPV drone flight',crash:'rapid crash zoom in',hand:'handheld camera, subtle shake',static:'[static] locked-off camera',roll:'slow camera roll'};
+const STY_EN={cine:'cinematic lighting, anamorphic look, shallow depth of field',nat:'natural light, realistic colors',anime:'anime style',vhs:'retro VHS look, analog artifacts',bw:'black and white, high contrast',neon:'neon lights, vivid saturated colors',doc:'documentary style, realistic'};
+let backendInfo=null,backendChecked=false;
+async function checkBackend(){
+  if(backendChecked)return backendInfo;
+  backendChecked=true;
+  if(!location.protocol.startsWith('http'))return null;
+  try{
+    const ctl=new AbortController();const to=setTimeout(()=>ctl.abort(),1800);
+    const r=await fetch('/api/health',{signal:ctl.signal});clearTimeout(to);
+    if(r.ok){const j=await r.json();if(j&&j.ok)backendInfo=j}
+  }catch(e){}
+  return backendInfo;
+}
+checkBackend().then(j=>{if(j)toast(j.mock?'Backend MiniMax en modo prueba (mock)':'MiniMax H3 conectado')});
+const imgToDataURL=im=>new Promise(res=>{
+  if(!im||!im.src)return res(null);
+  fetch(im.src).then(r=>r.blob()).then(b=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.onerror=()=>res(null);fr.readAsDataURL(b)}).catch(()=>res(null));
+});
+async function gatherImages(){
+  const out=[];
+  if(S.mode==='frames'){
+    const a=await imgToDataURL(S.f1);if(a)out.push({dataUrl:a,role:'first_frame'});
+    const b=await imgToDataURL(S.f2);if(b)out.push({dataUrl:b,role:'last_frame'});
+  }else if(S.mode==='image'){
+    for(const im of S.refs){const d=await imgToDataURL(im);if(d)out.push({dataUrl:d,role:'reference_image'})}
+  }
+  return out;
+}
+function realPrompt(){
+  const base=$('#prompt').value.trim();
+  return [base,CAM_EN[S.cam]||'',STY_EN[S.sty]||''].filter(Boolean).join(', ');
+}
+/* Mostrar clips reales: el <video> se sincroniza con el reproductor actual
+   (S.t / S.playing mandan; el canvas queda debajo, oculto por el video). */
+const origShowClip=showClip;
+showClip=function(c,autoplay){
+  origShowClip(c,false);
+  if(c&&c.videoUrl){
+    vid.src=c.videoUrl;vid.hidden=false;
+    vid.muted=!c.sound;
+    vid.onloadedmetadata=()=>{syncVid(true);if(autoplay)setPlaying(true)};
+    if(vid.readyState>=1){syncVid(true);if(autoplay)setPlaying(true)}
+  }else{
+    vid.pause();vid.hidden=true;vid.removeAttribute('src');vid.load();
+  }
+};
+function syncVid(seek){
+  if(!S.clip||!S.clip.videoUrl||!vid.duration)return;
+  const target=S.t*vid.duration;
+  if(seek||Math.abs(vid.currentTime-target)>.5){try{vid.currentTime=target}catch(e){}}
+  if(S.playing&&vid.paused)vid.play().catch(()=>{});
+  if(!S.playing&&!vid.paused)vid.pause();
+}
+setInterval(()=>syncVid(false),150);
+const origDl=$('#dl').onclick;
+$('#dl').onclick=()=>{
+  if(S.clip&&S.clip.videoUrl){
+    const a=document.createElement('a');a.href=S.clip.videoUrl;a.download='estudio-lumen.mp4';a.target='_blank';a.rel='noopener';a.click();return;
+  }
+  origDl();
+};
+async function realGenerate(info){
+  S.gen=true;setView('create');setPlaying(false);
+  $('#go').disabled=true;$('#go').firstChild.textContent='Generando… ';
+  $('#prog').hidden=false;
+  const arc=$('#arc'),t0=performance.now();
+  const anim=setInterval(()=>{
+    const p=Math.min(.95,(performance.now()-t0)/90000);
+    arc.style.strokeDashoffset=226*(1-p);$('#pp').textContent=Math.round(p*100)+'%';
+    $('#pt').textContent=STEPS[Math.min(STEPS.length-1,Math.floor(p*STEPS.length))];
+  },200);
+  const finish=()=>{clearInterval(anim);$('#prog').hidden=true;S.gen=false;$('#go').disabled=false;$('#go').firstChild.textContent='Generar '};
+  try{
+    const images=await gatherImages();
+    const r=await fetch('/api/generar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      prompt:realPrompt(),duration:S.dur,ratio:S.ar,
+      resolution:S.res==='720p'?'768P':'2K',uiModel:S.model,mode:S.mode,images})});
+    const j=await r.json();
+    if(!r.ok)throw new Error(j.error||('HTTP '+r.status));
+    if(j.duration&&j.duration!==S.dur)toast('MiniMax H3: duración ajustada a '+j.duration+' s (máx. 15)');
+    let done=null,fail=null;
+    while(!done&&!fail){
+      await new Promise(res=>setTimeout(res,4000));
+      const s=await fetch('/api/estado/'+encodeURIComponent(j.jobId)).then(x=>x.json()).catch(()=>({}));
+      if(s.status==='done')done=s;else if(s.status==='failed')fail=s;
+    }
+    if(fail)throw new Error(fail.error||'Generación fallida');
+    if(S.vars>1)toast('Modo real: se genera 1 variante por llamada a MiniMax');
+    S.credits-=Math.round(S.cost/S.vars);$('#credits').textContent=S.credits.toLocaleString('en-US');
+    const c=makeClips()[0];
+    c.videoUrl=done.videoUrl;c.real=true;c.model='MiniMax H3';c.dur=done.duration||c.dur;c.res=done.resolution||c.res;
+    c.thumb=thumb(c).toDataURL('image/jpeg',.8);
+    S.hist.unshift(c);drawHistStrip();showClip(c,true);
+    toast(info.mock?'Video de prueba listo (mock)':'Video real listo · coste ≈ $'+(done.cost!=null?done.cost:j.estimate||'?'));
+  }catch(e){
+    toast('MiniMax: '+e.message);
+  }
+  finish();
+}
+$('#go').onclick=async()=>{
+  if(S.gen)return;
+  if(!$('#prompt').value.trim()){toast('Escribe un prompt para continuar');$('#prompt').focus();return}
+  if(S.cost>S.credits){toast('No tienes créditos suficientes');return}
+  const info=await checkBackend();
+  if(info)realGenerate(info);else simGenerate();
+};
 /* ---------- inicio ---------- */
 build();sizeCanvas();drawExplore();drawHistStrip();setMode('text');
 </script>
