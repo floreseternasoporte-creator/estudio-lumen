@@ -10,9 +10,17 @@ la key.
 # Prueba sin gastar saldo (devuelve un video de muestra tras ~4 s):
 npm run mock            # = MINIMAX_MOCK=1 node server.js
 
-# Real (cobra por generación: $0,08/s a 768P, $0,13/s a 2K):
+# Real BARATO — fal.ai + PixVerse V6 (720p: $0,045/s sin audio, $0,06/s con audio):
+FAL_KEY=tu_key_de_fal node server.js
+
+# Real — MiniMax H3 directo ($0,08/s a 768P, $0,13/s a 2K):
 MINIMAX_API_KEY=tu_key node server.js
 ```
+
+Si están las dos keys, manda `FAL_KEY` (es el proveedor barato). Con fal,
+el modo Imagen usa `image-to-video` con la primera imagen y el modo
+Fotogramas usa el primer fotograma como arranque; PixVerse no ofrece 21:9,
+así que ese formato se genera sin fijar proporción.
 
 Abre http://localhost:8787 — la app detecta el backend sola (`/api/health`)
 y el botón Generar pasa a generar video real. Sin backend (p. ej. GitHub

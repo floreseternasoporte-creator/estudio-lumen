@@ -27,11 +27,20 @@ const path = require('path');
 const ROOT = path.join(__dirname, '..');
 const PORT = process.env.PORT || 8787;
 const KEY = process.env.MINIMAX_API_KEY || '';
-const MOCK = process.env.MINIMAX_MOCK === '1' || !KEY;
 const API = 'https://api.minimax.io';
+
+// Proveedor barato alternativo: fal.ai + PixVerse V6 (ver docs/APIS-VIDEO.md).
+// Si hay FAL_KEY, manda fal; si no, MiniMax; sin ninguna key, modo mock.
+const FAL_KEY = process.env.FAL_KEY || '';
+const FAL_BASE = process.env.FAL_BASE || 'https://queue.fal.run';
+const PROVIDER = FAL_KEY ? 'fal' : (KEY ? 'minimax' : 'mock');
+const MOCK = process.env.MINIMAX_MOCK === '1' || PROVIDER === 'mock';
+const MODEL_NAME = PROVIDER === 'fal' ? 'PixVerse V6 (fal.ai)' : 'MiniMax H3';
 
 // Precio lista MiniMax H3 (USD por segundo, pay-as-you-go, oct 2026)
 const PRICE = { '768P': 0.08, '2K': 0.13 };
+// PixVerse V6 en fal (USD por segundo, [sin audio, con audio], página oficial de fal, nov 2026)
+const FAL_PRICE = { '360p': [0.025, 0.035], '540p': [0.035, 0.045], '720p': [0.045, 0.06], '1080p': [0.09, 0.115] };
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css',
@@ -91,9 +100,9 @@ async function uploadImage(dataUrl, name) {
 }
 
 function mapRequest(b) {
-  // UI → MiniMax H3
+  // UI → MiniMax H3 (acepta la resolución cruda de la UI: 720p/1080p/4K)
   const duration = Math.max(4, Math.min(15, Math.round(b.duration || 5)));
-  let resolution = b.resolution === '2K' ? '2K' : '768P';
+  let resolution = (b.resolution === '2K' || b.resolution === '1080p' || b.resolution === '4K') ? '2K' : '768P';
   if (b.uiModel === 'fast') resolution = '768P';
   if (b.uiModel === 'cine') resolution = '2K';
   const ratios = ['16:9', '9:16', '1:1', '4:3', '21:9', '3:4'];
@@ -101,18 +110,73 @@ function mapRequest(b) {
   return { duration, resolution, ratio };
 }
 
+function mapFal(b) {
+  // UI → PixVerse V6 en fal.ai
+  const duration = Math.max(1, Math.min(15, Math.round(b.duration || 5)));
+  let resolution = ['720p', '1080p'].includes(b.resolution) ? b.resolution : '720p';
+  if (b.resolution === '4K') resolution = '1080p';
+  if (b.uiModel === 'fast') resolution = '720p';
+  if (b.uiModel === 'cine') resolution = '1080p';
+  const sound = b.sound !== false;
+  const rate = FAL_PRICE[resolution][sound ? 1 : 0];
+  const ratios = ['16:9', '9:16', '1:1', '4:3', '3:4']; // PixVerse no lista 21:9
+  return { duration, resolution, sound, cost: +(rate * duration).toFixed(3), ratio: ratios.includes(b.ratio) ? b.ratio : null };
+}
+
+async function falSubmit(b, mapped) {
+  const images = (Array.isArray(b.images) ? b.images : []).filter(i => i && i.dataUrl);
+  const first = images.find(i => i.role === 'first_frame') || images[0];
+  const input = {
+    prompt: String(b.prompt).slice(0, 2000),
+    resolution: mapped.resolution,
+    duration: mapped.duration,
+    generate_audio_switch: mapped.sound
+  };
+  if (mapped.ratio) input.aspect_ratio = mapped.ratio;
+  let endpoint = 'fal-ai/pixverse/v6/text-to-video';
+  if ((b.mode === 'image' || b.mode === 'frames') && first) {
+    endpoint = 'fal-ai/pixverse/v6/image-to-video';
+    input.image_url = first.dataUrl;
+  }
+  const r = await fetch(`${FAL_BASE}/${endpoint}`, {
+    method: 'POST',
+    headers: { Authorization: `Key ${FAL_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(input)
+  });
+  const j = await r.json().catch(() => null);
+  if (!r.ok || !j || !j.status_url) {
+    throw new Error(`fal (${r.status}): ${JSON.stringify(j).slice(0, 300)}`);
+  }
+  return j; // {request_id, status_url, response_url}
+}
+
 async function handleGenerar(req, res) {
   let b;
   try { b = JSON.parse(await readBody(req)); } catch (e) { return sendJSON(res, 400, { error: 'JSON inválido' }); }
   if (!b.prompt || !String(b.prompt).trim()) return sendJSON(res, 400, { error: 'Falta el prompt' });
-  const mapped = mapRequest(b);
-  const cost = +(PRICE[mapped.resolution] * mapped.duration).toFixed(2);
   const jobId = 'job_' + Date.now().toString(36) + '_' + (++seq);
 
   if (MOCK) {
+    const mapped = PROVIDER === 'fal' ? mapFal(b) : mapRequest(b);
+    const cost = PROVIDER === 'fal' ? mapped.cost : +(PRICE[mapped.resolution] * mapped.duration).toFixed(2);
     jobs.set(jobId, { kind: 'mock', createdAt: Date.now(), meta: { ...mapped, cost } });
     return sendJSON(res, 202, { jobId, mock: true, estimate: cost, ...mapped });
   }
+
+  if (PROVIDER === 'fal') {
+    const mapped = mapFal(b);
+    try {
+      const sub = await falSubmit(b, mapped);
+      jobs.set(jobId, { kind: 'fal', statusUrl: sub.status_url, responseUrl: sub.response_url, createdAt: Date.now(), meta: { ...mapped, modelName: MODEL_NAME } });
+      return sendJSON(res, 202, { jobId, estimate: mapped.cost, duration: mapped.duration, resolution: mapped.resolution, ratio: mapped.ratio });
+    } catch (e) {
+      console.error('fal submit:', e.message);
+      return sendJSON(res, 502, { error: e.message });
+    }
+  }
+
+  const mapped = mapRequest(b);
+  const cost = +(PRICE[mapped.resolution] * mapped.duration).toFixed(2);
 
   // Contenido multimodal
   const content = [{ type: 'text', text: String(b.prompt).slice(0, 7000) }];
@@ -146,7 +210,20 @@ async function handleEstado(res, jobId) {
   if (job.kind === 'mock') {
     const elapsed = Date.now() - job.createdAt;
     if (elapsed < 3500) return sendJSON(res, 200, { status: 'processing', progress: Math.min(90, Math.round(elapsed / 40)) });
-    return sendJSON(res, 200, { status: 'done', videoUrl: '/mock/sample.mp4', mock: true, ...job.meta });
+    return sendJSON(res, 200, { status: 'done', videoUrl: '/mock/sample.mp4', mock: true, modelName: MODEL_NAME + ' (mock)', ...job.meta });
+  }
+
+  if (job.kind === 'fal') {
+    const headers = { Authorization: `Key ${FAL_KEY}` };
+    const s = await fetch(job.statusUrl, { headers }).then(r => r.json()).catch(() => ({}));
+    if (s.status === 'COMPLETED') {
+      const out = await fetch(job.responseUrl, { headers }).then(r => r.json()).catch(() => ({}));
+      const url = (out.video && out.video.url) || (out.data && out.data.video && out.data.video.url);
+      if (!url) return sendJSON(res, 502, { error: 'fal terminó pero no devolvió URL de video' });
+      return sendJSON(res, 200, { status: 'done', videoUrl: url, ...job.meta });
+    }
+    if (s.status === 'FAILED') return sendJSON(res, 200, { status: 'failed', error: 'Generación fallida en fal/PixVerse' });
+    return sendJSON(res, 200, { status: 'processing', falStatus: s.status || 'IN_QUEUE' });
   }
 
   const q = await mm(`/v1/query/video_generation?task_id=${encodeURIComponent(job.taskId)}`, { method: 'GET' });
@@ -160,7 +237,7 @@ async function handleEstado(res, jobId) {
       url = f.json && f.json.file && f.json.file.download_url;
     }
     if (!url) return sendJSON(res, 502, { error: 'MiniMax terminó pero no devolvió URL de video' });
-    return sendJSON(res, 200, { status: 'done', videoUrl: url, ...job.meta });
+    return sendJSON(res, 200, { status: 'done', videoUrl: url, modelName: MODEL_NAME, ...job.meta });
   }
   if (st === 'Failed' || st === 'failed') {
     return sendJSON(res, 200, { status: 'failed', error: (j.base_resp && j.base_resp.status_msg) || 'Generación fallida en MiniMax' });
@@ -172,7 +249,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const u = new URL(req.url, 'http://localhost');
     if (u.pathname === '/api/health') {
-      return sendJSON(res, 200, { ok: true, provider: 'minimax', model: 'MiniMax-H3', hasKey: !!KEY, mock: MOCK });
+      return sendJSON(res, 200, { ok: true, provider: PROVIDER, model: MODEL_NAME, hasKey: !!(KEY || FAL_KEY), mock: MOCK });
     }
     if (u.pathname === '/api/generar' && req.method === 'POST') return await handleGenerar(req, res);
     if (u.pathname.startsWith('/api/estado/') && req.method === 'GET') {
@@ -198,5 +275,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`Estudio Lumen → http://localhost:${PORT}  (MiniMax H3, ${MOCK ? (KEY ? 'mock forzado' : 'MOCK: sin MINIMAX_API_KEY') : 'modo real'})`);
+  console.log(`Estudio Lumen → http://localhost:${PORT}  (proveedor: ${PROVIDER}, modelo: ${MODEL_NAME}${MOCK ? ', MOCK' : ''})`);
 });

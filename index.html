@@ -624,7 +624,7 @@ async function checkBackend(){
   }catch(e){}
   return backendInfo;
 }
-checkBackend().then(j=>{if(j)toast(j.mock?'Backend MiniMax en modo prueba (mock)':'MiniMax H3 conectado')});
+checkBackend().then(j=>{if(j)toast(j.mock?'Backend en modo prueba (mock): '+j.model:j.model+' conectado')});
 const imgToDataURL=im=>new Promise(res=>{
   if(!im||!im.src)return res(null);
   fetch(im.src).then(r=>r.blob()).then(b=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.onerror=()=>res(null);fr.readAsDataURL(b)}).catch(()=>res(null));
@@ -687,10 +687,10 @@ async function realGenerate(info){
     const images=await gatherImages();
     const r=await fetch('/api/generar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
       prompt:realPrompt(),duration:S.dur,ratio:S.ar,
-      resolution:S.res==='720p'?'768P':'2K',uiModel:S.model,mode:S.mode,images})});
+      resolution:S.res,uiModel:S.model,mode:S.mode,sound:S.sound,images})});
     const j=await r.json();
     if(!r.ok)throw new Error(j.error||('HTTP '+r.status));
-    if(j.duration&&j.duration!==S.dur)toast('MiniMax H3: duración ajustada a '+j.duration+' s (máx. 15)');
+    if(j.duration&&j.duration!==S.dur)toast('Duración ajustada a '+j.duration+' s (máx. del modelo: 15)');
     let done=null,fail=null;
     while(!done&&!fail){
       await new Promise(res=>setTimeout(res,4000));
@@ -701,12 +701,12 @@ async function realGenerate(info){
     if(S.vars>1)toast('Modo real: se genera 1 variante por llamada a MiniMax');
     S.credits-=Math.round(S.cost/S.vars);$('#credits').textContent=S.credits.toLocaleString('en-US');
     const c=makeClips()[0];
-    c.videoUrl=done.videoUrl;c.real=true;c.model='MiniMax H3';c.dur=done.duration||c.dur;c.res=done.resolution||c.res;
+    c.videoUrl=done.videoUrl;c.real=true;c.model=done.modelName||'API real';c.dur=done.duration||c.dur;c.res=done.resolution||c.res;
     c.thumb=thumb(c).toDataURL('image/jpeg',.8);
     S.hist.unshift(c);drawHistStrip();showClip(c,true);
     toast(info.mock?'Video de prueba listo (mock)':'Video real listo · coste ≈ $'+(done.cost!=null?done.cost:j.estimate||'?'));
   }catch(e){
-    toast('MiniMax: '+e.message);
+    toast('Error del proveedor: '+e.message);
   }
   finish();
 }
